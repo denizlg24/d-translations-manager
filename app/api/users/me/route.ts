@@ -49,6 +49,7 @@ export async function GET(request: NextRequest) {
 // PUT /api/users/me - Update current user
 export async function PUT(request: NextRequest) {
   const userId = request.headers.get('x-user-id');
+  const userEmail = request.headers.get('x-user-email');
   
   if (!userId) {
     return NextResponse.json({ error: 'User ID required' }, { status: 401 });
@@ -56,11 +57,20 @@ export async function PUT(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { name } = body;
+    const { name, email } = body;
 
-    const user = await prisma.user.update({
+    // Use upsert to create user if doesn't exist
+    const user = await prisma.user.upsert({
       where: { id: userId },
-      data: { name },
+      update: { 
+        name: name || undefined,
+        email: email || undefined,
+      },
+      create: {
+        id: userId,
+        email: email || userEmail || '',
+        name: name || null,
+      },
     });
 
     return NextResponse.json(user);

@@ -51,32 +51,8 @@ type View = 'home' | 'editor';
 type MobilePanel = 'languages' | 'keys' | 'editor';
 type HomeTab = 'local' | 'cloud';
 
-// Global typing state - prevents autosave from running while user is typing
-let globalTypingTimeout: NodeJS.Timeout | null = null;
-let isGloballyTyping = false;
-const typingListeners = new Set<(typing: boolean) => void>();
-
-function setGlobalTyping(typing: boolean) {
-  if (globalTypingTimeout) {
-    clearTimeout(globalTypingTimeout);
-    globalTypingTimeout = null;
-  }
-  
-  if (typing) {
-    isGloballyTyping = true;
-  } else {
-    // Debounce the "stopped typing" by 1.5 seconds
-    globalTypingTimeout = setTimeout(() => {
-      isGloballyTyping = false;
-      typingListeners.forEach(fn => fn(false));
-    }, 1500);
-    return; // Don't notify yet
-  }
-  
-  typingListeners.forEach(fn => fn(isGloballyTyping));
-}
-
-// Debounced translation input component to prevent re-renders on every keystroke
+// Translation input component - manages its own state completely
+// Parent should use a unique key prop to reset when switching translation keys
 interface TranslationInputProps {
   lang: string;
   initialValue: string;
@@ -89,39 +65,20 @@ const TranslationInput = memo(function TranslationInput({
   onSave,
 }: TranslationInputProps) {
   const [localValue, setLocalValue] = useState(initialValue);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Update local value when initialValue changes (e.g., when selecting a different key)
-  useEffect(() => {
-    setLocalValue(initialValue);
-  }, [initialValue]);
+  const hasChangedRef = useRef(false);
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;
     setLocalValue(newValue);
-    
-    // Signal that user is typing
-    setGlobalTyping(true);
-
-    // Debounce the save
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
-
-    saveTimeoutRef.current = setTimeout(() => {
-      onSave(lang, newValue);
-      // Signal typing stopped after save is queued
-      setGlobalTyping(false);
-    }, 300);
+    hasChangedRef.current = true;
   };
 
-  // Save immediately on blur
+  // Only update parent state on blur to avoid re-renders during typing
   const handleBlur = () => {
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
+    if (hasChangedRef.current) {
+      onSave(lang, localValue);
+      hasChangedRef.current = false;
     }
-    onSave(lang, localValue);
-    setGlobalTyping(false);
   };
 
   return (
@@ -384,7 +341,6 @@ export function TranslationManager() {
   const [renamingProject, setRenamingProject] = useState<TranslationProject | null>(null);
   const [renamingName, setRenamingName] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Keep a stable reference to masterData to prevent unnecessary keyTree rebuilds
   const masterDataRef = useRef<Record<string, unknown> | null>(null);
@@ -411,66 +367,42 @@ export function TranslationManager() {
     }
   }, [currentProject]);
 
-  // Track if a save is in progress to avoid overlapping saves
-  const isSavingRef = useRef(false);
-  const pendingSaveRef = useRef<TranslationProject | null>(null);
+  // Track if a save is in progress
+  const [isSaving, setIsSaving] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
-  const autoSave = useCallback((project: TranslationProject) => {
-    // Clear any pending timeout
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
+  // Manual save function
+  const handleSave = useCallback(async () => {
+    if (!currentProject || isSaving) return;
+    
+    setIsSaving(true);
+    try {
+      // Save to local storage
+      await saveProject(currentProject);
+      
+      // If it's a cloud project, also sync to cloud
+      if (currentCloudProject && cloudProjectRole !== 'viewer') {
+        await updateCloudProject(currentCloudProject.id, {
+          masterData: currentProject.masterData,
+          translations: currentProject.translations,
+          targetLanguages: currentProject.targetLanguages,
+        });
+      }
+      
+      setLastSaved(new Date());
+      setHasUnsavedChanges(false);
+    } catch (error) {
+      console.error('Save failed:', error);
+      setNotification({ type: 'error', message: 'Failed to save project. Please try again.' });
+    } finally {
+      setIsSaving(false);
     }
+  }, [currentProject, currentCloudProject, cloudProjectRole, isSaving]);
 
-    // Store the latest project to save
-    pendingSaveRef.current = project;
-
-    const attemptSave = async () => {
-      // If user is still typing, wait and try again
-      if (isGloballyTyping) {
-        saveTimeoutRef.current = setTimeout(attemptSave, 500);
-        return;
-      }
-      
-      // If already saving, the pending save will be picked up after
-      if (isSavingRef.current) {
-        return;
-      }
-
-      const projectToSave = pendingSaveRef.current;
-      if (!projectToSave) return;
-
-      isSavingRef.current = true;
-      pendingSaveRef.current = null;
-      
-      try {
-        // Save to local storage first
-        await saveProject(projectToSave);
-        
-        // If it's a cloud project, also sync to cloud
-        if (currentCloudProject && cloudProjectRole !== 'viewer') {
-          await updateCloudProject(currentCloudProject.id, {
-            masterData: projectToSave.masterData,
-            translations: projectToSave.translations,
-            targetLanguages: projectToSave.targetLanguages,
-          });
-        }
-        
-        setLastSaved(new Date());
-      } catch (error) {
-        console.error('Auto-save failed:', error);
-      } finally {
-        isSavingRef.current = false;
-        
-        // Check if there's another pending save that came in while we were saving
-        if (pendingSaveRef.current) {
-          saveTimeoutRef.current = setTimeout(attemptSave, 500);
-        }
-      }
-    };
-
-    // Initial delay before attempting save
-    saveTimeoutRef.current = setTimeout(attemptSave, 1000);
-  }, [currentCloudProject, cloudProjectRole]);
+  // Mark as having unsaved changes when project changes
+  const markUnsaved = useCallback(() => {
+    setHasUnsavedChanges(true);
+  }, []);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -546,10 +478,10 @@ export function TranslationManager() {
         },
       };
 
-      autoSave(updated);
+      markUnsaved();
       return updated;
     });
-  }, [autoSave]);
+  }, [markUnsaved]);
 
   const handleRemoveLanguage = (lang: string) => {
     if (!currentProject) return;
@@ -563,7 +495,7 @@ export function TranslationManager() {
     };
 
     setCurrentProject(updated);
-    autoSave(updated);
+    markUnsaved();
   };
 
   const handleTranslationChange = useCallback((lang: string, value: string) => {
@@ -578,10 +510,10 @@ export function TranslationManager() {
         },
       };
 
-      autoSave(updated);
       return updated;
     });
-  }, [selectedKey, autoSave]);
+    markUnsaved();
+  }, [selectedKey, markUnsaved]);
 
   const handleExport = (lang: string) => {
     if (!currentProject) return;
@@ -1060,11 +992,12 @@ export function TranslationManager() {
                 );
 
                 return (
-                  <div key={`${lang}-${selectedKey}`}>
+                  <div key={lang}>
                     <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground block mb-2">
                       {lang}
                     </label>
                     <TranslationInput
+                      key={`${lang}-${selectedKey}`}
                       lang={lang}
                       initialValue={String(currentValue || '')}
                       onSave={handleTranslationChange}
@@ -1175,6 +1108,17 @@ export function TranslationManager() {
               </Badge>
             )}
             
+            {/* Save button */}
+            <Button
+              variant={hasUnsavedChanges ? 'default' : 'outline'}
+              size="sm"
+              onClick={handleSave}
+              disabled={isSaving || !hasUnsavedChanges}
+              className="hidden sm:flex"
+            >
+              {isSaving ? 'Saving...' : hasUnsavedChanges ? 'Save' : 'Saved'}
+            </Button>
+            
             <Button
               variant="outline"
               size="sm"
@@ -1184,6 +1128,30 @@ export function TranslationManager() {
             >
               Export All
             </Button>
+            {/* Mobile Save button */}
+            <Button
+              variant={hasUnsavedChanges ? 'default' : 'outline'}
+              size="icon-sm"
+              onClick={handleSave}
+              disabled={isSaving || !hasUnsavedChanges}
+              className="sm:hidden"
+              title={isSaving ? 'Saving...' : hasUnsavedChanges ? 'Save' : 'Saved'}
+            >
+              <svg
+                className="size-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"
+                />
+              </svg>
+            </Button>
+            {/* Mobile Export button */}
             <Button
               variant="outline"
               size="icon-sm"
