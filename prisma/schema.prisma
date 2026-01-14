@@ -1,0 +1,90 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Projects owned by this user
+  ownedProjects Project[]
+
+  // Projects user is a member of
+  memberships ProjectMember[]
+
+  // Invite codes created by this user
+  createdInvites InviteCode[]
+}
+
+model Project {
+  id              String   @id @default(cuid())
+  name            String
+  masterLanguage  String   @default("en")
+  targetLanguages String[] @default([])
+  masterData      Json     @default("{}")
+  translations    Json     @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Owner of the project
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // Members who have access to this project
+  members ProjectMember[]
+
+  // Invite codes for this project
+  inviteCodes InviteCode[]
+
+  @@index([ownerId])
+}
+
+model ProjectMember {
+  id       String   @id @default(cuid())
+  role     String   @default("editor") // "editor" or "viewer"
+  joinedAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId])
+  @@index([projectId])
+}
+
+model InviteCode {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  role      String    @default("editor") // Role granted when code is used
+  maxUses   Int? // null = unlimited
+  uses      Int       @default(0)
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  // Who created the invite
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  // Which project this invite is for
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([code])
+}
