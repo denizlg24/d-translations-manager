@@ -330,6 +330,7 @@ export function TranslationManager() {
   const [view, setView] = useState<View>('home');
   const [homeTab, setHomeTab] = useState<HomeTab>('local');
   const [projects, setProjects] = useState<TranslationProject[]>([]);
+  const [cloudProjectIds, setCloudProjectIds] = useState<Set<string>>(new Set());
   const [currentProject, setCurrentProject] = useState<TranslationProject | null>(null);
   const [currentCloudProject, setCurrentCloudProject] = useState<CloudProject | null>(null);
   const [cloudProjectRole, setCloudProjectRole] = useState<'owner' | 'editor' | 'viewer'>('viewer');
@@ -341,6 +342,12 @@ export function TranslationManager() {
   const [renamingProject, setRenamingProject] = useState<TranslationProject | null>(null);
   const [renamingName, setRenamingName] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Filter out local projects that are also cloud projects
+  const localOnlyProjects = useMemo(() => 
+    projects.filter(p => !cloudProjectIds.has(p.id)),
+    [projects, cloudProjectIds]
+  );
 
   // Keep a stable reference to masterData to prevent unnecessary keyTree rebuilds
   const masterDataRef = useRef<Record<string, unknown> | null>(null);
@@ -545,6 +552,8 @@ export function TranslationManager() {
     }
     
     try {
+      const localProjectId = currentProject.id;
+      
       const cloudProject = await createCloudProject({
         name: currentProject.name,
         masterLanguage: currentProject.masterLanguage,
@@ -553,9 +562,16 @@ export function TranslationManager() {
         translations: currentProject.translations,
       });
       
+      // Delete the local project since it's now in the cloud
+      await deleteProject(localProjectId);
+      setProjects((prev) => prev.filter((p) => p.id !== localProjectId));
+      
+      // Update cloudProjectIds to include the new cloud project
+      setCloudProjectIds((prev) => new Set([...prev, cloudProject.id]));
+      
       setCurrentCloudProject(cloudProject);
       setCloudProjectRole('owner');
-      setNotification({ type: 'success', message: 'Project uploaded to cloud successfully! You can now share it with others.' });
+      setNotification({ type: 'success', message: 'Project uploaded to cloud successfully! The local copy has been removed.' });
     } catch (error) {
       console.error('Failed to upload to cloud:', error);
       setNotification({ type: 'error', message: 'Failed to upload project to cloud. Please try again.' });
@@ -738,13 +754,13 @@ export function TranslationManager() {
                 </Button>
               </section>
 
-              {projects.length > 0 && (
+              {localOnlyProjects.length > 0 && (
                 <section>
                   <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-4">
                     Recent Projects
                   </h2>
                   <div className="space-y-2">
-                    {projects.map((project) => (
+                    {localOnlyProjects.map((project) => (
                       <div
                         key={project.id}
                         className="group flex items-center justify-between p-4 rounded-lg border border-border hover:bg-muted/30 transition-colors cursor-pointer"
@@ -897,6 +913,7 @@ export function TranslationManager() {
                 setSelectedKey(null);
                 setView('editor');
               }}
+              onProjectsLoaded={(ids) => setCloudProjectIds(new Set(ids))}
             />
           )}
         </div>
@@ -1200,7 +1217,7 @@ export function TranslationManager() {
       )}
 
       {/* Mobile Tab Navigation */}
-      <div className="md:hidden border-b border-border bg-muted/30">
+      <div className="lg:hidden border-b border-border bg-muted/30">
         <div className="flex">
           <button
             onClick={() => setMobilePanel('languages')}
@@ -1236,7 +1253,7 @@ export function TranslationManager() {
       </div>
 
       {/* Desktop Layout */}
-      <div className="flex-1 hidden md:flex">
+      <div className="flex-1 hidden lg:flex">
         {/* Sidebar - Languages */}
         <aside className="w-64 border-r border-border p-4">
           <LanguagesPanel />
@@ -1275,7 +1292,7 @@ export function TranslationManager() {
       </div>
 
       {/* Mobile Layout */}
-      <div className="flex-1 md:hidden flex flex-col overflow-hidden">
+      <div className="flex-1 lg:hidden flex flex-col overflow-hidden">
         {/* Mobile Breadcrumb (only show on keys panel) */}
         {mobilePanel === 'keys' && (
           <div className="px-4 py-2 border-b border-border bg-muted/30">

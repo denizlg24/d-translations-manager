@@ -27,9 +27,10 @@ import { JoinProject } from './join-project';
 
 interface CloudProjectsManagerProps {
   onOpenProject: (project: Project, role: 'owner' | 'editor' | 'viewer') => void;
+  onProjectsLoaded?: (projectIds: string[]) => void;
 }
 
-export function CloudProjectsManager({ onOpenProject }: CloudProjectsManagerProps) {
+export function CloudProjectsManager({ onOpenProject, onProjectsLoaded }: CloudProjectsManagerProps) {
   const [isUserReady, setIsUserReady] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -42,13 +43,14 @@ export function CloudProjectsManager({ onOpenProject }: CloudProjectsManagerProp
     try {
       const cloudProjects = await listCloudProjects();
       setProjects(cloudProjects);
+      onProjectsLoaded?.(cloudProjects.map(p => p.id));
     } catch (err) {
       console.error('Failed to load cloud projects:', err);
       setError('Failed to load cloud projects');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [onProjectsLoaded]);
 
   useEffect(() => {
     if (hasUserProfile()) {
