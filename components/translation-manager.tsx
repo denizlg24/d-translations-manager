@@ -45,6 +45,7 @@ import {
   updateProject as updateCloudProject,
   createProject as createCloudProject,
   hasUserProfile,
+  translateWithAI,
 } from '@/lib/api';
 
 type View = 'home' | 'editor';
@@ -56,15 +57,20 @@ type HomeTab = 'local' | 'cloud';
 interface TranslationInputProps {
   lang: string;
   initialValue: string;
+  masterValue: string;
+  masterLanguage: string;
   onSave: (lang: string, value: string) => void;
 }
 
 const TranslationInput = memo(function TranslationInput({
   lang,
   initialValue,
+  masterValue,
+  masterLanguage,
   onSave,
 }: TranslationInputProps) {
   const [localValue, setLocalValue] = useState(initialValue);
+  const [isTranslating, setIsTranslating] = useState(false);
   const hasChangedRef = useRef(false);
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -81,14 +87,92 @@ const TranslationInput = memo(function TranslationInput({
     }
   };
 
+  const handleAITranslate = async () => {
+    if (!masterValue || isTranslating) return;
+    
+    setIsTranslating(true);
+    try {
+      const result = await translateWithAI({
+        text: String(masterValue),
+        from: masterLanguage,
+        to: lang,
+      });
+      
+      setLocalValue(result.translation);
+      hasChangedRef.current = true;
+      // Immediately save the AI translation
+      onSave(lang, result.translation);
+      hasChangedRef.current = false;
+    } catch (error) {
+      console.error('AI translation failed:', error);
+      // Could add a toast notification here
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
   return (
-    <Textarea
-      value={localValue}
-      onChange={handleChange}
-      onBlur={handleBlur}
-      placeholder={`Enter ${lang} translation...`}
-      className="min-h-20"
-    />
+    <div className="space-y-2">
+      <div className="flex gap-2">
+        <Textarea
+          value={localValue}
+          onChange={handleChange}
+          onBlur={handleBlur}
+          placeholder={`Enter ${lang} translation...`}
+          className="min-h-20 flex-1"
+        />
+      </div>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleAITranslate}
+        disabled={isTranslating || !masterValue}
+        className="w-full"
+      >
+        {isTranslating ? (
+          <>
+            <svg
+              className="size-4 mr-2 animate-spin"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
+            </svg>
+            Translating...
+          </>
+        ) : (
+          <>
+            <svg
+              className="size-4 mr-2"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"
+              />
+            </svg>
+            Translate with AI
+          </>
+        )}
+      </Button>
+    </div>
   );
 });
 
@@ -1017,6 +1101,8 @@ export function TranslationManager() {
                       key={`${lang}-${selectedKey}`}
                       lang={lang}
                       initialValue={String(currentValue || '')}
+                      masterValue={String(masterValue || '')}
+                      masterLanguage={currentProject.masterLanguage}
                       onSave={handleTranslationChange}
                     />
                   </div>
